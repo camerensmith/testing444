@@ -30,13 +30,27 @@ CPC = 5.00                              # Cost per click ($)
 BOT_SCORE_THRESHOLD = 80                # Risk score above which session = "Bot"
 VELOCITY_THRESHOLD = 10                 # Max page views per IP in time window
 VELOCITY_WINDOW_SECONDS = 60            # Sliding window size (seconds)
-BLOCKED_COUNTRIES = {"China", "Russia"} # Geofenced countries
+BLOCKED_COUNTRIES = {"China", "Russia"} # Geofenced countries (extend via --blocked-countries)
 
-# Regex to detect known bot/crawler/scraper user agent strings
-BOT_UA_PATTERNS = re.compile(
-    r"bot|crawl|spider|scrapy|python-requests|curl|wget|httpclient|libwww|java/",
-    re.IGNORECASE
-)
+# Base patterns used to detect known bot/crawler/scraper user agent strings.
+# Extend at runtime via --bot-ua-patterns.
+BASE_BOT_UA_PATTERNS = [
+    "bot", "crawl", "spider", "scrapy", "python-requests",
+    "curl", "wget", "httpclient", "libwww", "java/",
+]
+
+def _build_bot_ua_regex(extra_patterns: list[str] | None = None) -> re.Pattern:
+    """Compile the bot UA regex from base patterns plus any extra patterns.
+
+    Patterns are treated as regex substrings (not escaped), so you can pass
+    plain strings like 'go-http-client' or regex fragments like r'go-http.*'.
+    """
+    patterns = list(BASE_BOT_UA_PATTERNS)
+    if extra_patterns:
+        patterns.extend(extra_patterns)
+    return re.compile("|".join(patterns), re.IGNORECASE)
+
+BOT_UA_PATTERNS = _build_bot_ua_regex()
 
 # Output file paths
 OUTPUT_RESULTS = Path("processed_sessions.json")
@@ -197,7 +211,11 @@ def find_velocity_ips(sessions: list[dict]) -> set[str]:
     return flagged_ips
 
 
-def detect_threats(sessions: list[dict]) -> list[dict]:
+def detect_threats(
+    sessions: list[dict],
+    bot_ua_regex: re.Pattern | None = None,
+    blocked_countries: set[str] | None = None,
+) -> list[dict]:
     """
     Score each session using 4 independent detection rules.
     Scores are ADDITIVE — a session triggering multiple rules gets a higher score.
@@ -212,7 +230,20 @@ def detect_threats(sessions: list[dict]) -> list[dict]:
         Score 0       → "Valid"      (clean traffic)
         Score 1-80    → "Suspicious" (monitor, don't block)
         Score 81-100  → "Bot"        (block immediately)
+
+    Args:
+        bot_ua_regex:       Compiled regex for bot UA detection. Defaults to
+                            BOT_UA_PATTERNS (built from BASE_BOT_UA_PATTERNS).
+                            Pass a custom regex to extend or replace patterns.
+        blocked_countries:  Set of country names to geofence. Defaults to
+                            BLOCKED_COUNTRIES. Pass a custom set to add or
+                            change which countries are blocked.
     """
+    if bot_ua_regex is None:
+        bot_ua_regex = BOT_UA_PATTERNS
+    if blocked_countries is None:
+        blocked_countries = BLOCKED_COUNTRIES
+
     velocity_ips = find_velocity_ips(sessions)
 
     for session in sessions:
@@ -234,13 +265,13 @@ def detect_threats(sessions: list[dict]) -> list[dict]:
         # Rule 3: Bot User Agent
         # Many bots use automated HTTP libraries that identify themselves
         ua = session.get("user_agent", "")
-        if not ua or BOT_UA_PATTERNS.search(ua):
+        if not ua or bot_ua_regex.search(ua):
             score += 45
             flags.append("bot_ua")
 
         # Rule 4: Geofencing
         # Block traffic from countries where the client has no business
-        if session.get("country", "").strip() in BLOCKED_COUNTRIES:
+        if session.get("country", "").strip() in blocked_countries:
             score += 40
             flags.append("geofenced")
 
@@ -407,7 +438,39 @@ def main():
         "--file", type=str, default=None,
         help="Path to local CSV file (if not provided, fetches from remote URL)"
     )
+    parser.add_argument(
+        "--blocked-countries", type=str, default=None,
+        metavar="COUNTRY1,COUNTRY2,...",
+        help=(
+            "Comma-separated list of additional countries to geofence "
+            "(added to the default: China, Russia). "
+            "Example: --blocked-countries 'Iran,North Korea'"
+        ),
+    )
+    parser.add_argument(
+        "--bot-ua-patterns", type=str, default=None,
+        metavar="PATTERN1,PATTERN2,...",
+        help=(
+            "Comma-separated list of additional user-agent substrings to flag "
+            "as bots (added to the built-in list). "
+            "Example: --bot-ua-patterns 'go-http-client,axios,okhttp'"
+        ),
+    )
     args = parser.parse_args()
+
+    # Build runtime-configurable blocked countries set
+    blocked_countries = set(BLOCKED_COUNTRIES)
+    if args.blocked_countries:
+        extra = {c.strip() for c in args.blocked_countries.split(",") if c.strip()}
+        blocked_countries |= extra
+        print(f"[config] Blocked countries: {sorted(blocked_countries)}")
+
+    # Build runtime-configurable bot UA regex
+    extra_ua_patterns = None
+    if args.bot_ua_patterns:
+        extra_ua_patterns = [p.strip() for p in args.bot_ua_patterns.split(",") if p.strip()]
+        print(f"[config] Extra bot UA patterns: {extra_ua_patterns}")
+    bot_ua_regex = _build_bot_ua_regex(extra_ua_patterns)
 
     print("=" * 60)
     print("  CHEQ Automated Threat Mitigation Pipeline")
@@ -426,7 +489,7 @@ def main():
         sys.exit(1)
 
     # ── DETECT ──
-    sessions = detect_threats(sessions)
+    sessions = detect_threats(sessions, bot_ua_regex=bot_ua_regex, blocked_countries=blocked_countries)
 
     # ── REMEDIATE ──
     summary = remediate(sessions)

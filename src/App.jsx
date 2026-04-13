@@ -1,5 +1,5 @@
 import React from 'react';
-import Dashboard from '../dashboard.jsx';
+import Dashboard from './dashboard.jsx';
 
 const sampleData = [
   { name: 'Jan', value: 400 },

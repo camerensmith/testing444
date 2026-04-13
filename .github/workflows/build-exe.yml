@@ -1,0 +1,48 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller==6.13.0
+
+      - name: Build executable
+        run: pyinstaller --onefile --name pipeline pipeline.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-windows-exe
+          path: dist/pipeline.exe
+          retention-days: 90
+
+      - name: Attach to latest release (if one exists)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG=$(gh release list --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)
+          if [ -n "$TAG" ]; then
+            gh release upload "$TAG" dist/pipeline.exe --clobber
+            echo "Uploaded pipeline.exe to release $TAG"
+          else
+            echo "No release found — exe is available as a workflow artifact"
+          fi

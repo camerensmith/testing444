@@ -1,11 +1,28 @@
 # CHEQ Automated Threat Mitigation Pipeline — Setup Guide
 
-## Prerequisites
+## Two Ways to Run
 
-- Python 3.10+
-- No external dependencies (stdlib only)
+### Option 1 — GitHub Pages Dashboard (primary)
 
-## Quick Start
+Visit the live dashboard deployed to GitHub Pages — no installation needed.
+
+### Option 2 — Local Pipeline (standalone executable)
+
+Download the pre-built `pipeline.exe` from the latest [GitHub Actions run](../../actions/workflows/build-exe.yml) (click the most recent run → **pipeline-windows-exe** artifact) and double-click it, or run it from the command prompt:
+
+```cmd
+:: Fetch data from the remote endpoint automatically
+pipeline.exe
+
+:: Or supply a local CSV file
+pipeline.exe --file data.csv
+```
+
+No Python installation required — the executable is fully self-contained.
+
+---
+
+### Running from source (requires Python 3.10+)
 
 ```bash
 # Run the pipeline (fetches data from remote endpoint automatically)
